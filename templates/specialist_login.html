@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Вход в кабинет</title>
+    <style>
+      :root {
+        --bg-start: #0b1020;
+        --bg-end: #1f2a44;
+        --card-bg: rgba(255, 255, 255, 0.08);
+        --border: rgba(255, 255, 255, 0.16);
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --primary: #4f46e5;
+        --primary-2: #7c3aed;
+        --error: #ef4444;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg-start: #eef2ff;
+          --bg-end: #e0e7ff;
+          --card-bg: rgba(255, 255, 255, 0.72);
+          --border: rgba(15, 23, 42, 0.08);
+          --text: #0f172a;
+          --muted: #475569;
+          --primary: #4f46e5;
+          --primary-2: #7c3aed;
+          --error: #b91c1c;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu,
+          Cantarell, "Helvetica Neue", Arial;
+        color: var(--text);
+        background: radial-gradient(
+            1200px 800px at 10% 10%,
+            #1e293b33,
+            transparent 40%
+          ),
+          radial-gradient(1000px 700px at 90% 20%, #4f46e533, transparent 45%),
+          linear-gradient(160deg, var(--bg-start), var(--bg-end));
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        width: min(92vw, 420px);
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        backdrop-filter: blur(12px) saturate(1.2);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+        padding: 28px 24px;
+        animation: fadeIn 300ms ease-out;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, var(--primary), var(--primary-2));
+        color: #fff;
+        font-weight: 700;
+      }
+      .title {
+        font-size: 24px;
+        font-weight: 700;
+        margin: 0 0 6px;
+      }
+      .subtitle {
+        color: var(--muted);
+        margin: 0 0 22px;
+      }
+      label {
+        display: block;
+        margin: 12px 0 8px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .input {
+        width: 100%;
+        padding: 12px 14px;
+        font-size: 16px;
+        color: var(--text);
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        outline: none;
+        transition: border-color 180ms, box-shadow 180ms;
+      }
+      .input:focus {
+        border-color: color-mix(in oklab, var(--primary) 70%, white 30%);
+        box-shadow: 0 0 0 4px
+          color-mix(in oklab, var(--primary) 18%, transparent);
+      }
+      .actions {
+        margin-top: 18px;
+      }
+      .btn {
+        width: 100%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 0;
+        background: linear-gradient(135deg, var(--primary), var(--primary-2));
+        color: white;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 120ms ease, filter 200ms ease;
+      }
+      .btn:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.05);
+      }
+      .btn:active {
+        transform: translateY(0);
+        filter: brightness(0.97);
+      }
+      .btn[disabled] {
+        opacity: 0.7;
+        cursor: not-allowed;
+      }
+      .spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid #ffffff80;
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 800ms linear infinite;
+      }
+      .note {
+        margin-top: 14px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .error {
+        color: var(--error);
+        margin-top: 10px;
+        font-size: 14px;
+        min-height: 20px;
+      }
+      .botlink {
+        color: color-mix(in oklab, var(--primary) 80%, white 20%);
+        text-decoration: none;
+      }
+      .botlink:hover {
+        text-decoration: underline;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.7.2/dist/axios.min.js"></script>
+    <script>
+      function normalizePhone(value) {
+        const digits = (value || "").replace(/\D/g, "");
+        const last10 = digits.slice(-10);
+        return last10 ? `+7${last10}` : "";
+      }
+      function formatMask(value) {
+        const digits = (value || "").replace(/\D/g, "").slice(-10);
+        const p1 = digits.slice(0, 3);
+        const p2 = digits.slice(3, 6);
+        const p3 = digits.slice(6, 8);
+        const p4 = digits.slice(8, 10);
+        let out = "+7";
+        out += p1 ? ` (${p1}` + (p1.length === 3 ? ")" : "") : " (";
+        out += p2 ? ` ${p2}` : "";
+        out += p3 ? `-${p3}` : "";
+        out += p4 ? `-${p4}` : "";
+        return out;
+      }
+      function onPhoneInput(e) {
+        const v = e.target.value;
+        e.target.value = formatMask(v);
+      }
+      async function requestCode(e) {
+        e.preventDefault();
+        const phoneInput = document.getElementById("phone");
+        const errorEl = document.getElementById("error");
+        const btn = document.getElementById("btn");
+        errorEl.textContent = "";
+        const phone = normalizePhone(phoneInput.value);
+        if (!phone) {
+          errorEl.textContent = "Введите номер телефона";
+          return;
+        }
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Отправка...';
+        try {
+          const { data } = await axios.post(
+            "/api/auth/specialist/request-code",
+            { phone }
+          );
+          if (data && data.sent) {
+            sessionStorage.setItem("login_phone", phone);
+            window.location.href = "/login/code";
+          } else {
+            errorEl.textContent =
+              data.message ||
+              "Специалист не найден. Откройте бота и попробуйте снова.";
+          }
+        } catch (e) {
+          errorEl.textContent = "Ошибка сети. Попробуйте позже.";
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Получить код";
+        }
+      }
+      window.addEventListener("DOMContentLoaded", () => {
+        const input = document.getElementById("phone");
+        input.addEventListener("input", onPhoneInput);
+        if (!input.value) input.value = "+7 (";
+      });
+    </script>
+  </head>
+  <body>
+    <div class="card">
+      <div class="brand">
+        <div class="badge">N</div>
+        <div style="font-weight: 700">Naznach Admin</div>
+      </div>
+      <h1 class="title">Вход в кабинет</h1>
+      <p class="subtitle">
+        Укажите номер телефона, на который зарегистрирован ваш профиль.
+      </p>
+      <form onsubmit="requestCode(event)">
+        <label for="phone">Телефон</label>
+        <input
+          id="phone"
+          class="input"
+          name="phone"
+          placeholder="+7 (___) ___-__-__"
+          autocomplete="tel"
+          inputmode="numeric"
+        />
+        <div class="actions">
+          <button id="btn" class="btn" type="submit">Получить код</button>
+        </div>
+        <div class="note">
+          Код придёт в Telegram‑бот. Если бот не открыт — перейдите по ссылке
+          <a
+            class="botlink"
+            href="https://t.me/{{ bot_username }}"
+            target="_blank"
+            >t.me/{{ bot_username }}</a
+          >.
+        </div>
+        <div class="note">Код действует 5 минут.</div>
+        <div id="error" class="error"></div>
+      </form>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+<section id="section-profile" class="section grid">
+  <div class="card">
+    <h2>Профиль</h2>
+    <div class="muted">Основная информация</div>
+    <p>
+      Имя: {{ specialist.first_name or '' }} {{ specialist.last_name or '' }}
+    </p>
+    <p>Телефон: {{ specialist.phone or '-' }}</p>
+    <p>Адрес: {{ specialist.address or '-' }}</p>
+    <p>Статус: {{ specialist.status or '-' }}</p>
+    <button class="btn" onclick="location.reload()">Сохранить</button>
+  </div>
+  <div class="card">
+    <h2>Ссылка в Telegram</h2>
+    <p class="muted">Отправьте клиентам вашу персональную ссылку</p>
+    <p>
+      <a href="{{ specialist.telegram_link or '#' }}" target="_blank"
+        >{{ specialist.telegram_link or '-' }}</a
+      >
+    </p>
+  </div>
+</section>

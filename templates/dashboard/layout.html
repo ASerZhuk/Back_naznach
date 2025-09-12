@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Дашборд</title>
+    {% include 'dashboard/styles.html' %}
+    <script>
+      async function logout() {
+        await fetch("/api/auth/specialist/logout", { method: "POST" });
+        location.href = "/login";
+      }
+      function setTab(tab) {
+        document
+          .querySelectorAll(".tab")
+          .forEach((t) => t.classList.remove("active"));
+        const btn = document.getElementById("tab-" + tab);
+        if (btn) btn.classList.add("active");
+        document
+          .querySelectorAll(".section")
+          .forEach((s) => (s.style.display = "none"));
+        const sec = document.getElementById("section-" + tab);
+        if (sec) sec.style.display = "block";
+      }
+      window.addEventListener("DOMContentLoaded", () => setTab("profile"));
+    </script>
+  </head>
+  <body>
+    <div class="container">
+      {% include 'dashboard/topbar.html' %}
+      <div class="layout">
+        <main class="main">
+          {% include 'dashboard/section_profile.html' %} {% include
+          'dashboard/section_schedule.html' %} {% include
+          'dashboard/section_services.html' %} {% include
+          'dashboard/section_appointments.html' %}
+        </main>
+        {% include 'dashboard/sidebar.html' %}
+      </div>
+    </div>
+    {% include 'dashboard/scripts.html' %}
+  </body>
+</html>

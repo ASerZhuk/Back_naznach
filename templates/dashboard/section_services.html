@@ -1,0 +1,23 @@
+<section id="section-services" class="section" style="display: none">
+  <div class="card">
+    <h2>Услуги</h2>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Название</th>
+          <th>Цена</th>
+          <th>Длительность</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in specialist.services %}
+        <tr>
+          <td>{{ s.name }}</td>
+          <td>{{ (s.price or '-') ~ ' ' ~ (s.valuta or '') }}</td>
+          <td><span class="pill">{{ s.duration or '-' }} мин</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>

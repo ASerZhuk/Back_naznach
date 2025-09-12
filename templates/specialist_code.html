@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Подтверждение кода</title>
+    <style>
+      :root {
+        --bg-start: #0b1020;
+        --bg-end: #1f2a44;
+        --card-bg: rgba(255, 255, 255, 0.08);
+        --border: rgba(255, 255, 255, 0.16);
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --primary: #4f46e5;
+        --primary-2: #7c3aed;
+        --error: #ef4444;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg-start: #eef2ff;
+          --bg-end: #e0e7ff;
+          --card-bg: rgba(255, 255, 255, 0.72);
+          --border: rgba(15, 23, 42, 0.08);
+          --text: #0f172a;
+          --muted: #475569;
+          --primary: #4f46e5;
+          --primary-2: #7c3aed;
+          --error: #b91c1c;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu,
+          Cantarell, "Helvetica Neue", Arial;
+        color: var(--text);
+        background: radial-gradient(
+            1200px 800px at 10% 10%,
+            #1e293b33,
+            transparent 40%
+          ),
+          radial-gradient(1000px 700px at 90% 20%, #4f46e533, transparent 45%),
+          linear-gradient(160deg, var(--bg-start), var(--bg-end));
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        width: min(92vw, 420px);
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        backdrop-filter: blur(12px) saturate(1.2);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+        padding: 28px 24px;
+        animation: fadeIn 300ms ease-out;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, var(--primary), var(--primary-2));
+        color: #fff;
+        font-weight: 700;
+      }
+      .title {
+        font-size: 24px;
+        font-weight: 700;
+        margin: 0 0 6px;
+      }
+      .subtitle {
+        color: var(--muted);
+        margin: 0 0 22px;
+      }
+      .code {
+        width: 100%;
+        padding: 12px 14px;
+        font-size: 28px;
+        letter-spacing: 10px;
+        text-align: center;
+        color: var(--text);
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        outline: none;
+        transition: border-color 180ms, box-shadow 180ms;
+      }
+      .code:focus {
+        border-color: color-mix(in oklab, var(--primary) 70%, white 30%);
+        box-shadow: 0 0 0 4px
+          color-mix(in oklab, var(--primary) 18%, transparent);
+      }
+      .actions {
+        margin-top: 18px;
+        display: flex;
+        gap: 10px;
+      }
+      .btn {
+        flex: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 0;
+        background: linear-gradient(135deg, var(--primary), var(--primary-2));
+        color: white;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 120ms ease, filter 200ms ease;
+      }
+      .btn:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.05);
+      }
+      .btn:active {
+        transform: translateY(0);
+        filter: brightness(0.97);
+      }
+      .btn[disabled] {
+        opacity: 0.7;
+        cursor: not-allowed;
+      }
+      .link {
+        color: color-mix(in oklab, var(--primary) 80%, white 20%);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .link:hover {
+        text-decoration: underline;
+      }
+      .note {
+        margin-top: 14px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .error {
+        color: var(--error);
+        margin-top: 10px;
+        font-size: 14px;
+        min-height: 20px;
+      }
+      .meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+    </style>
+    <script>
+      let cooldown = 30;
+      function updateTimer() {
+        const el = document.getElementById("resend");
+        if (cooldown > 0) {
+          el.textContent = `Повторная отправка через ${cooldown} c`;
+          cooldown -= 1;
+          setTimeout(updateTimer, 1000);
+        } else {
+          el.innerHTML =
+            '<a class="link" href="#" onclick="resend(event)">Отправить код снова</a>';
+        }
+      }
+      async function resend(e) {
+        e.preventDefault();
+        const phone = sessionStorage.getItem("login_phone");
+        if (!phone) return;
+        const el = document.getElementById("resend");
+        el.textContent = "Отправка...";
+        try {
+          await fetch("/api/auth/specialist/request-code", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone }),
+          });
+        } catch {}
+        cooldown = 30;
+        updateTimer();
+      }
+      async function verify(e) {
+        e.preventDefault();
+        const phone = sessionStorage.getItem("login_phone");
+        const code = document.getElementById("code").value.trim();
+        const errorEl = document.getElementById("error");
+        const btn = document.getElementById("btn");
+        errorEl.textContent = "";
+        if (!phone || code.length !== 6) {
+          errorEl.textContent = "Введите 6‑значный код";
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = "Проверка...";
+        try {
+          const resp = await fetch("/api/auth/specialist/verify-code", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone, code }),
+          });
+          const data = await resp.json();
+          if (resp.ok) {
+            window.location.href = "/dashboard";
+          } else {
+            errorEl.textContent =
+              data.detail || "Неверный или просроченный код";
+          }
+        } catch (e) {
+          errorEl.textContent = "Ошибка сети. Попробуйте позже.";
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Подтвердить";
+        }
+      }
+      window.addEventListener("DOMContentLoaded", () => {
+        updateTimer();
+        document.getElementById("code").focus();
+      });
+    </script>
+  </head>
+  <body>
+    <div class="card">
+      <div class="brand">
+        <div class="badge">N</div>
+        <div style="font-weight: 700">Naznach Admin</div>
+      </div>
+      <h1 class="title">Введите код</h1>
+      <p class="subtitle">
+        Мы отправили 6‑значный код в ваш Telegram‑бот. Введите его ниже, код
+        действует 5 минут.
+      </p>
+      <form onsubmit="verify(event)">
+        <input
+          id="code"
+          class="code"
+          maxlength="6"
+          placeholder="••••••"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+        />
+        <div class="actions">
+          <button id="btn" class="btn" type="submit">Подтвердить</button>
+          <a class="link" href="/login">Назад</a>
+        </div>
+        <div class="meta"><span id="resend"></span></div>
+        <div id="error" class="error"></div>
+      </form>
+    </div>
+  </body>
+</html>

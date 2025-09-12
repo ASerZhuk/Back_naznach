@@ -1,0 +1,27 @@
+<script>
+  const APPTS = [
+    {% for a in specialist.appointments -%}
+    {{ {'date': a.date, 'time': a.time, 'service': a.service_name or '', 'client': a.client_name or a.client_id } | tojson }}{% if not loop.last %},{% endif %}
+    {%- endfor %}
+  ];
+  const GRAFIKS = [
+    {% for g in specialist.grafiks -%}
+    {{ {'grafik_type': g.grafik_type, 'specific_date': g.specific_date, 'day_of_week': g.day_of_week, 'start_time': g.start_time, 'end_time': g.end_time, 'time_slots': g.time_slots } | tojson }}{% if not loop.last %},{% endif %}
+    {%- endfor %}
+  ];
+  const DOW = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  function parseDMY(d){ if(!d) return null; const [dd,mm,yy]=d.split('.'); return new Date(Number(yy), Number(mm)-1, Number(dd)); }
+  function fmtDMY(dt){ const dd=String(dt.getDate()).padStart(2,'0'); const mm=String(dt.getMonth()+1).padStart(2,'0'); const yy=dt.getFullYear(); return `${dd}.${mm}.${yy}`; }
+  function fmtYMD(dt){ const dd=String(dt.getDate()).padStart(2,'0'); const mm=String(dt.getMonth()+1).padStart(2,'0'); const yy=dt.getFullYear(); return `${yy}-${mm}-${dd}`; }
+  function monthMatrix(year, month){ const first = new Date(year, month, 1); const start = new Date(first); const day = (first.getDay()+6)%7; start.setDate(first.getDate()-day); const cells=[]; for(let i=0;i<42;i++){ const d=new Date(start); d.setDate(start.getDate()+i); cells.push(d);} return cells; }
+  function renderDOW(id){ const c=document.getElementById(id); if(!c) return; c.innerHTML=''; for(const d of DOW){ const el=document.createElement('div'); el.className='cal-dow'; el.textContent=d; c.appendChild(el);} }
+  function renderCalendar(gridId, y, m, marks, onSelect){ const grid=document.getElementById(gridId); if(!grid) return; grid.innerHTML=''; const todayStr=fmtDMY(new Date()); for(const d of monthMatrix(y,m)){ const ds=fmtDMY(d); const el=document.createElement('div'); el.className='cal-cell'; if(ds===todayStr) el.classList.add('today'); if(marks && marks[ds]) el.classList.add('has'); el.innerHTML=`<div class="d">${d.getDate()}</div><div class="marks">${marks && marks[ds]? (marks[ds].slice(0,3).map(m=>`• ${m.time} ${m.service||''}`).join('<br>')):''}</div>`; el.addEventListener('click',()=> onSelect && onSelect(d)); grid.appendChild(el);} }
+  function groupByDate(items){ const m={}; for(const it of items){ const k=it.date; (m[k]=m[k]||[]).push(it);} return m; }
+  function fillDetails(date){ const ds=fmtDMY(date); const arr=(groupByDate(APPTS)[ds]||[]); const box=document.getElementById('calendar-details'); if(!box) return; if(!arr.length){ box.innerHTML = `<strong>${ds}</strong><div class="muted">Записей нет</div>`; return; } box.innerHTML = `<strong>${ds}</strong>` + arr.map(a=>`<div>⏰ ${a.time} — ${a.service||'-'} <span class="muted">(${a.client||''})</span></div>`).join(''); }
+  function matchesGrafik(date, g){ const ymd=fmtYMD(date); const dow=((date.getDay()+6)%7)+1; if(g.specific_date){ return g.specific_date===ymd; } if(g.day_of_week){ return g.day_of_week===dow; } return false; }
+  function fillSchedule(date){ const box=document.getElementById('schedule-cards'); if(!box) return; box.innerHTML=''; const items=GRAFIKS.filter(g=>matchesGrafik(date,g)); if(!items.length){ box.innerHTML = `<div class="muted">Нет доступных слотов на выбранный день</div>`; return; } for(const g of items){ const card=document.createElement('div'); card.className='card'; if(g.grafik_type==='available_slots'){ card.innerHTML = `<div style="font-weight:600; margin-bottom:6px;">Доступные слоты</div>` + (g.time_slots||[]).map(t=>`<span class="pill" style="margin:4px 6px 0 0; display:inline-block;">${t}</span>`).join(''); } else { card.innerHTML = `<div style=\"font-weight:600; margin-bottom:6px;\">Рабочее время</div><div>с ${g.start_time||'-'} до ${g.end_time||'-'}</div>`; } box.appendChild(card);} }
+  (function init(){ const today=new Date(); // mini
+    let my=today.getFullYear(), mm=today.getMonth(); renderDOW('mini-dow'); const rerMini=()=>renderCalendar('mini-grid',my,mm,null,(d)=>fillSchedule(d)); document.getElementById('mini-prev')?.addEventListener('click',()=>{ mm--; if(mm<0){mm=11; my--;} rerMini();}); document.getElementById('mini-next')?.addEventListener('click',()=>{ mm++; if(mm>11){mm=0; my++;} rerMini();}); rerMini(); fillSchedule(today);
+    // big
+    renderDOW('big-dow'); const marks=groupByDate(APPTS); let by=today.getFullYear(), bm=today.getMonth(); const rerBig=()=>renderCalendar('big-grid',by,bm,marks,(d)=>fillDetails(d)); document.getElementById('big-prev')?.addEventListener('click',()=>{ bm--; if(bm<0){bm=11; by--;} rerBig();}); document.getElementById('big-next')?.addEventListener('click',()=>{ bm++; if(bm>11){bm=0; by++;} rerBig();}); rerBig(); fillDetails(today); })();
+</script>
