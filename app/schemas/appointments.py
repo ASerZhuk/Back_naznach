@@ -68,8 +68,7 @@ class AppointmentResponse(AppointmentBase):
     
     class Config:
         from_attributes = True
-        orm_mode = True
-
+        
 
 
 

@@ -16,8 +16,7 @@ class SubscriptionPlanResponse(BaseModel):
 
     class Config:
         from_attributes = True
-        orm_mode = True
-
+        
 
 
 class SubscriptionPlanCreate(BaseModel):

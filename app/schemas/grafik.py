@@ -176,8 +176,6 @@ class WorkScheduleResponse(WorkScheduleBase):
     
     class Config:
         from_attributes = True
-        orm_mode = True
-
 
 
 class AvailableSlotsResponse(AvailableSlotsBase):
@@ -186,8 +184,6 @@ class AvailableSlotsResponse(AvailableSlotsBase):
     
     class Config:
         from_attributes = True
-        orm_mode = True
-
 
 
 class GrafikResponse(GrafikBase):
@@ -196,5 +192,3 @@ class GrafikResponse(GrafikBase):
     
     class Config:
         from_attributes = True
-        orm_mode = True
-

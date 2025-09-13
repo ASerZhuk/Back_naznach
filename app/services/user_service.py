@@ -15,7 +15,7 @@ class UserService:
     def __init__(self, db: AsyncSession):
         self.db = db
     
-    async def get_user_by_telegram_id(self, telegram_id: str):
+    async def get_user_by_telegram_id(self, telegram_id: str) -> Optional[UserResponse]:
         """Получить пользователя по telegram_id"""
         try:
             result = await self.db.execute(
@@ -54,7 +54,7 @@ class UserService:
             logger.error(f"Ошибка при получении пользователя: {e}")
             return None
     
-    async def create_user(self, user_data: UserCreate):
+    async def create_user(self, user_data: UserCreate) -> UserResponse:
         """Создать нового пользователя"""
         try:
             user = User(**user_data.dict())
@@ -67,7 +67,7 @@ class UserService:
             await self.db.rollback()
             raise
     
-    async def update_user(self, telegram_id: str, user_data: UserUpdate):
+    async def update_user(self, telegram_id: str, user_data: UserUpdate) -> Optional[UserResponse]:
         """Обновить пользователя"""
         try:
             user = await self.get_user_by_telegram_id(telegram_id)
@@ -85,10 +85,10 @@ class UserService:
             await self.db.rollback()
             raise
     
-    async def register_or_update_user(self, telegram_id: str, username: str = None, first_name: str = None, last_name: str = None):
+    async def register_or_update_user(self, telegram_id: str, username: str = None, first_name: str = None, last_name: str = None) -> UserResponse:
         """Зарегистрировать или обновить пользователя"""
         try:
-            user = await self.get_user_by_telegram_id(telegram_id)
+            user = await self.get_user_by_telegram_id(telegram_id) 
             
             if user:
                 # Обновляем существующего пользователя
@@ -111,7 +111,7 @@ class UserService:
             logger.error(f"Ошибка при регистрации/обновлении пользователя: {e}")
             raise
     
-    async def set_user_type(self, telegram_id: str, is_master: bool):
+    async def set_user_type(self, telegram_id: str, is_master: bool) -> Optional[UserResponse]:
         """Установить тип пользователя (специалист или клиент)"""
         try:
             user = await self.get_user_by_telegram_id(telegram_id)
@@ -129,7 +129,7 @@ class UserService:
             await self.db.rollback()
             raise
     
-    async def mark_user_not_first(self, telegram_id: str):
+    async def mark_user_not_first(self, telegram_id: str) -> Optional[UserResponse]:
         """Отметить, что пользователь уже не первый раз заходит"""
         try:
             user = await self.get_user_by_telegram_id(telegram_id)
