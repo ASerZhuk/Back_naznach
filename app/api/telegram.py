@@ -6,6 +6,9 @@ from ..services.telegram_bot import telegram_bot
 from ..services import SpecialistService
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 import aiohttp
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
@@ -78,7 +81,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
             # Регистрируем пользователя на бэке (идемпотентно)
             async with aiohttp.ClientSession() as session:
-                await session.post(
+                async with session.post(
                     f"{settings.api_url}/api/auth/register",
                     json={
                         "telegram_id": user_id,
@@ -86,7 +89,10 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         "first_name": first_name,
                         "last_name": last_name,
                     },
-                )
+                ) as response:
+                    # Проверяем статус ответа для логирования
+                    if response.status not in [200, 201]:
+                        logger.warning(f"Неожиданный статус при регистрации пользователя {user_id}: {response.status}")
 
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[
