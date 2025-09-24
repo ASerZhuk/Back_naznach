@@ -133,13 +133,33 @@ class SubscriptionService:
             trial_end_date=trial_end_date
         )
 
-    async def activate_subscription(self, specialist_id: str, plan_type: str, 
+    async def activate_subscription(self, specialist_id: str, plan_type: str,
                                   payment_id: str, amount_paid: int) -> SubscriptionResponse:
-        """Активировать подписку после успешной оплаты"""
-        subscription = await self.get_current_subscription(specialist_id)
-        
-        if not subscription:
-            raise ValueError("Подписка не найдена")
+        """Активировать подписку после успешной оплаты (работаем с ORM-моделью)."""
+        # Получаем ORM-инстанс подписки
+        result = await self.db.execute(
+            select(Subscription).where(Subscription.specialist_id == specialist_id)
+        )
+        subscription_orm = result.scalar_one_or_none()
+
+        if not subscription_orm:
+            # Создаем запись подписки, если её ещё нет (первый платёж без захода в мини‑апп)
+            try:
+                subscription_orm = Subscription(
+                    specialist_id=specialist_id,
+                    plan_type=SubscriptionPlan(plan_type) if isinstance(plan_type, str) else plan_type,
+                    status=SubscriptionStatus.TRIAL,
+                )
+                self.db.add(subscription_orm)
+                await self.db.flush()
+            except Exception:
+                # Если не получилось создать — пробуем ещё раз получить
+                result = await self.db.execute(
+                    select(Subscription).where(Subscription.specialist_id == specialist_id)
+                )
+                subscription_orm = result.scalar_one_or_none()
+                if not subscription_orm:
+                    raise ValueError("Подписка не найдена")
 
         # Получаем информацию о плане из базы данных
         plan_info = await self.get_plan_info(plan_type)
@@ -147,22 +167,19 @@ class SubscriptionService:
             raise ValueError(f"План подписки '{plan_type}' не найден")
 
         # Обновляем подписку
-        subscription.plan_type = plan_type
-        subscription.status = SubscriptionStatus.ACTIVE
-        subscription.start_date = datetime.now(timezone.utc)
-        subscription.end_date = subscription.start_date + timedelta(
-            days=plan_info.duration_days
-        )
-        subscription.payment_id = payment_id
-        subscription.amount_paid = amount_paid
+        subscription_orm.plan_type = plan_type
+        subscription_orm.status = SubscriptionStatus.ACTIVE
+        subscription_orm.start_date = datetime.now(timezone.utc)
+        subscription_orm.end_date = subscription_orm.start_date + timedelta(days=plan_info.duration_days)
+        subscription_orm.payment_id = payment_id
+        subscription_orm.amount_paid = amount_paid
 
         await self.db.commit()
-        await self.db.refresh(subscription)
+        await self.db.refresh(subscription_orm)
 
-        return SubscriptionResponse.model_validate(subscription)
+        return SubscriptionResponse.model_validate(subscription_orm)
 
     async def has_access(self, specialist_id: str) -> bool:
         """Проверить, есть ли у специалиста доступ к функциям"""
         status = await self.check_subscription_status(specialist_id)
         return status.has_active_subscription or status.is_trial_active
-
