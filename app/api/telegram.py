@@ -550,9 +550,6 @@ async def telegram_pay(token: str, method: str):
     if method not in {"bank_card", "sbp"}:
         return HTMLResponse("Неподдерживаемый способ оплаты", status_code=400)
 
-    if method == "sbp":
-        return HTMLResponse("Оплата через СБП пока в разработке", status_code=501)
-
     payload = {
         "telegram_id": telegram_id,
         "specialist_id": specialist_id,
