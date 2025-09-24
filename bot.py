@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 from decimal import Decimal
@@ -24,12 +25,17 @@ dp = Dispatcher(storage=storage)
 # Глобальная сессия aiohttp для переиспользования
 http_session = None
 pending_payments: Dict[str, dict] = {}
+plan_cache: Dict[str, dict] = {}
 
 
 def format_price(price_kopecks: Optional[int]) -> str:
     if price_kopecks is None:
         return "-"
-    rubles = Decimal(price_kopecks) / Decimal(100)
+    try:
+        value = int(price_kopecks)
+    except (TypeError, ValueError):
+        return "-"
+    rubles = Decimal(value) / Decimal(100)
     return f"{rubles:.2f} ₽"
 
 
@@ -64,7 +70,7 @@ async def request_payment_link(payload: dict, method: str) -> dict:
 
     amount_decimal = None
     if price_kopecks is not None:
-        amount_decimal = Decimal(price_kopecks) / Decimal(100)
+        amount_decimal = Decimal(str(price_kopecks)) / Decimal(100)
     elif plan.get("amount") is not None:
         amount_decimal = Decimal(str(plan["amount"]))
 
@@ -90,6 +96,109 @@ async def request_payment_link(payload: dict, method: str) -> dict:
             raise ValueError(data if isinstance(data, str) else data.get("error", "Не удалось создать платеж"))
         return data
 
+
+def decode_payment_start_param(raw_param: str) -> Optional[dict]:
+    if not raw_param:
+        return None
+    padding = "=" * (-len(raw_param) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((raw_param + padding).encode("utf-8")).decode("utf-8")
+    except Exception:
+        return None
+
+    parts = decoded.split("|")
+    if len(parts) < 6 or parts[0] != "payment":
+        return None
+
+    specialist_id = parts[2] or None
+    plan_type = parts[3] or None
+    price_raw = parts[4] or None
+    currency = parts[5] or "RUB"
+
+    if not specialist_id or not plan_type:
+        return None
+
+    try:
+        price_kopecks = int(price_raw) if price_raw else None
+    except (TypeError, ValueError):
+        price_kopecks = None
+
+    return {
+        "specialist_id": specialist_id,
+        "plan_type": plan_type,
+        "price_kopecks": price_kopecks,
+        "currency": currency,
+    }
+
+
+async def get_plan_details(plan_type: Optional[str]) -> Optional[dict]:
+    if not plan_type:
+        return None
+
+    cached = plan_cache.get(plan_type)
+    if cached:
+        return cached
+
+    session = await get_http_session()
+    try:
+        async with session.get(f"{settings.api_url}/api/subscriptions/plans") as response:
+            if response.status != 200:
+                return None
+            plans = await response.json()
+            for plan in plans:
+                plan_type_value = plan.get("plan_type")
+                if plan_type_value:
+                    plan_cache[plan_type_value] = plan
+            return plan_cache.get(plan_type)
+    except Exception as exc:
+        logger.error("Не удалось получить список планов: %s", exc)
+        return None
+
+
+async def process_payment_command(chat_id: str, user_id: str, payload: dict):
+    if not user_id:
+        await bot.send_message(chat_id, "Не удалось определить пользователя. Попробуйте снова.")
+        return
+
+    payload = dict(payload)
+    payload["telegram_id"] = user_id
+
+    specialist_id = payload.get("specialist_id")
+    plan = payload.setdefault("plan", {})
+    plan_type = plan.get("plan_type")
+
+    if not specialist_id or not plan_type:
+        await bot.send_message(chat_id, "Не удалось определить данные для оплаты. Попробуйте снова.")
+        return
+
+    plan_details = await get_plan_details(plan_type)
+    if plan_details:
+        plan.setdefault("name", plan_details.get("name"))
+        plan.setdefault("price_kopecks", plan.get("price_kopecks") or plan_details.get("price"))
+        plan.setdefault("currency", plan.get("currency") or "RUB")
+        plan.setdefault("duration_days", plan.get("duration_days") or plan_details.get("duration_days"))
+
+    pending_payments[user_id] = payload
+
+    plan_name = plan.get("name") or plan_type
+    price_text = format_price(plan.get("price_kopecks"))
+
+    text_lines = [
+        "Вы собираетесь оформить подписку.",
+        f"\n<b>Тариф:</b> {plan_name}",
+        f"<b>Стоимость:</b> {price_text}",
+        "\nВыберите способ оплаты:",
+    ]
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text="\n".join(text_lines),
+        parse_mode="HTML",
+        reply_markup=build_payment_keyboard(),
+        disable_web_page_preview=True,
+    )
+    logger.info("Пользователю %s отправлено меню выбора способа оплаты", user_id)
+
 async def get_http_session():
     """Получить глобальную HTTP сессию"""
     global http_session
@@ -114,10 +223,23 @@ async def cmd_start(message: types.Message, state: FSMContext):
         
         # Получаем параметр команды (user_id специалиста)
         command_args = message.text.split() if message.text else []
-        specialist_user_id = None
-        if len(command_args) > 1:
-            specialist_user_id = command_args[1]
-        
+        start_param = command_args[1] if len(command_args) > 1 else None
+
+        decoded_payment = decode_payment_start_param(start_param or "") if start_param else None
+        if decoded_payment:
+            payload = {
+                "specialist_id": decoded_payment.get("specialist_id"),
+                "plan": {
+                    "plan_type": decoded_payment.get("plan_type"),
+                    "price_kopecks": decoded_payment.get("price_kopecks"),
+                    "currency": decoded_payment.get("currency"),
+                },
+            }
+            await process_payment_command(str(message.chat.id), user_id, payload)
+            return
+
+        specialist_user_id = start_param
+
         # Если есть параметр специалиста, показываем информацию о специалисте
         if specialist_user_id:
             await show_specialist_info(message, specialist_user_id)
@@ -164,24 +286,7 @@ async def handle_web_app_data(message: types.Message):
         return
 
     user_id = str(message.from_user.id)
-    payload["telegram_id"] = user_id
-    pending_payments[user_id] = payload
-
-    plan = payload.get("plan", {})
-    plan_name = plan.get("name", "подписку")
-    price_text = format_price(plan.get("price_kopecks"))
-
-    text_lines = [
-        "Вы собираетесь оформить подписку.",
-        f"\n<b>Тариф:</b> {plan_name}",
-        f"<b>Стоимость:</b> {price_text}",
-        "\nВыберите способ оплаты:",
-    ]
-
-    keyboard = build_payment_keyboard()
-
-    await message.answer("\n".join(text_lines), parse_mode="HTML", reply_markup=keyboard)
-    logger.info("Пользователю %s отправлено меню выбора способа оплаты", user_id)
+    await process_payment_command(str(message.chat.id), user_id, payload)
 
 
 @dp.callback_query(F.data.startswith("payment:"))

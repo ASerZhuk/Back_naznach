@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 from decimal import Decimal
@@ -18,12 +19,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
 pending_payments: Dict[str, dict] = {}
+plan_cache: Dict[str, dict] = {}
 
 
 def format_price(price_kopecks: Optional[int]) -> str:
     if price_kopecks is None:
         return "-"
-    rubles = Decimal(price_kopecks) / Decimal(100)
+    try:
+        value = int(price_kopecks)
+    except (TypeError, ValueError):
+        return "-"
+    rubles = Decimal(value) / Decimal(100)
     return f"{rubles:.2f} ₽"
 
 
@@ -57,7 +63,7 @@ async def request_payment_link(payload: dict, method: str) -> dict:
 
     amount_decimal = None
     if price_kopecks is not None:
-        amount_decimal = Decimal(price_kopecks) / Decimal(100)
+        amount_decimal = Decimal(str(price_kopecks)) / Decimal(100)
     elif plan.get("amount") is not None:
         amount_decimal = Decimal(str(plan["amount"]))
 
@@ -89,12 +95,96 @@ async def request_payment_link(payload: dict, method: str) -> dict:
             return data
 
 
+def decode_payment_start_param(raw_param: str) -> Optional[dict]:
+    if not raw_param:
+        return None
+    padding = "=" * (-len(raw_param) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((raw_param + padding).encode("utf-8")).decode("utf-8")
+    except Exception:
+        return None
+
+    parts = decoded.split("|")
+    if len(parts) < 6 or parts[0] != "payment":
+        return None
+
+    specialist_id = parts[2] or None
+    plan_type = parts[3] or None
+    price_raw = parts[4] or None
+    currency = parts[5] or "RUB"
+
+    if not specialist_id or not plan_type:
+        return None
+
+    try:
+        price_kopecks = int(price_raw) if price_raw else None
+    except (TypeError, ValueError):
+        price_kopecks = None
+
+    return {
+        "specialist_id": specialist_id,
+        "plan_type": plan_type,
+        "price_kopecks": price_kopecks,
+        "currency": currency,
+    }
+
+
+async def get_plan_details(plan_type: Optional[str]) -> Optional[dict]:
+    if not plan_type:
+        return None
+
+    cached = plan_cache.get(plan_type)
+    if cached:
+        return cached
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(f"{settings.api_url}/api/subscriptions/plans") as response:
+                if response.status != 200:
+                    return None
+                plans = await response.json()
+                for plan in plans:
+                    plan_type_value = plan.get("plan_type")
+                    if plan_type_value:
+                        plan_cache[plan_type_value] = plan
+                return plan_cache.get(plan_type)
+        except Exception as exc:
+            logger.error("Не удалось получить список планов: %s", exc)
+            return None
+
+
 async def process_payment_command(chat_id: str, user_id: str, payload: dict):
+    if not user_id:
+        await telegram_bot.bot.send_message(
+            chat_id=chat_id,
+            text="Не удалось определить пользователя. Попробуйте снова.",
+        )
+        return
+
+    payload = dict(payload)
     payload["telegram_id"] = user_id
+
+    specialist_id = payload.get("specialist_id")
+    plan = payload.setdefault("plan", {})
+    plan_type = plan.get("plan_type")
+
+    if not specialist_id or not plan_type:
+        await telegram_bot.bot.send_message(
+            chat_id=chat_id,
+            text="Не удалось определить данные для оплаты. Попробуйте снова.",
+        )
+        return
+
+    plan_details = await get_plan_details(plan_type)
+    if plan_details:
+        plan.setdefault("name", plan_details.get("name"))
+        plan.setdefault("price_kopecks", plan.get("price_kopecks") or plan_details.get("price"))
+        plan.setdefault("currency", plan.get("currency") or "RUB")
+        plan.setdefault("duration_days", plan.get("duration_days") or plan_details.get("duration_days"))
+
     pending_payments[user_id] = payload
 
-    plan = payload.get("plan", {})
-    plan_name = plan.get("name", "подписка")
+    plan_name = plan.get("name") or plan_type
     price_text = format_price(plan.get("price_kopecks"))
 
     text_lines = [
@@ -290,13 +380,31 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     chat = message.get("chat") or {}
     chat_id = str(chat.get("id"))
     text = message.get("text") or ""
+    from_user = message.get("from") or {}
+    raw_user_id = from_user.get("id")
+    user_id = str(raw_user_id) if raw_user_id is not None else ""
 
     # /start
     if text.startswith("/start"):
         parts = text.split()
-        # /start <user_id>
+        # /start <token>
         if len(parts) > 1:
-            specialist_user_id = parts[1]
+            start_param = parts[1]
+
+            decoded_payment = decode_payment_start_param(start_param)
+            if decoded_payment:
+                payload = {
+                    "specialist_id": decoded_payment.get("specialist_id"),
+                    "plan": {
+                        "plan_type": decoded_payment.get("plan_type"),
+                        "price_kopecks": decoded_payment.get("price_kopecks"),
+                        "currency": decoded_payment.get("currency"),
+                    },
+                }
+                await process_payment_command(chat_id, user_id, payload)
+                return {"ok": True}
+
+            specialist_user_id = start_param
             # Берем специалиста напрямую из БД и сохраняем chat_id при необходимости
             specialist_service = SpecialistService(db)
             specialist = await specialist_service.get_specialist_by_user_id(specialist_user_id)
@@ -334,11 +442,9 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 await telegram_bot.bot.send_message(chat_id=chat_id, text="❌ Специалист не найден. Проверьте ссылку.")
         else:
             # /start без параметра: регистрация пользователя и кнопка открытия приложения
-            user = message.get("from") or {}
-            user_id = str(user.get("id"))
-            username = user.get("username")
-            first_name = user.get("first_name")
-            last_name = user.get("last_name")
+            username = from_user.get("username")
+            first_name = from_user.get("first_name")
+            last_name = from_user.get("last_name")
 
             # Регистрируем пользователя на бэке (идемпотентно)
             async with aiohttp.ClientSession() as session:
