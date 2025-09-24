@@ -255,11 +255,6 @@ async def process_payment_callback(callback_query: dict) -> bool:
         return True
 
     try:
-        await telegram_bot.bot.answer_callback_query(callback_id, text="Формируем ссылку...")
-    except Exception:
-        logger.debug("Не удалось отправить answer_callback_query", exc_info=True)
-
-    try:
         payment_response = await request_payment_link(payload, method)
     except ValueError as error:
         logger.error("Не удалось создать платеж (webhook): %s", error)
@@ -292,47 +287,41 @@ async def process_payment_callback(callback_query: dict) -> bool:
 
     pending_payments.pop(user_id, None)
 
-    if chat_id and message_id:
-        try:
-            await telegram_bot.bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=message_id,
-                reply_markup=None,
-            )
-        except Exception:
-            pass
-
-    button_keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Перейти к оплате",
-                    url=confirmation_url,
-                )
+    try:
+        await telegram_bot.bot.answer_callback_query(callback_id, url=confirmation_url)
+    except Exception:
+        logger.debug("Не удалось выдать ссылку через answer_callback_query", exc_info=True)
+        button_keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Перейти к оплате",
+                        url=confirmation_url,
+                    )
+                ]
             ]
-        ]
-    )
-
-    plan = payload.get("plan", {})
-    plan_name = plan.get("name", "подписка")
-    price_text = format_price(plan.get("price_kopecks"))
-    header = f"Счёт #{payment_id} создан." if payment_id else "Счёт создан."
-
-    message_lines = [
-        header,
-        f"<b>Тариф:</b> {plan_name}",
-        f"<b>Стоимость:</b> {price_text}",
-        "\nНажмите кнопку ниже, чтобы перейти на страницу оплаты ЮKassa. После успешного платежа мы начислим подписку и пришлём уведомление.",
-    ]
-
-    if chat_id:
-        await telegram_bot.bot.send_message(
-            chat_id=chat_id,
-            text="\n".join(message_lines),
-            parse_mode="HTML",
-            reply_markup=button_keyboard,
-            disable_web_page_preview=True,
         )
+
+        plan = payload.get("plan", {})
+        plan_name = plan.get("name", "подписка")
+        price_text = format_price(plan.get("price_kopecks"))
+        header = f"Счёт #{payment_id} создан." if payment_id else "Счёт создан."
+
+        message_lines = [
+            header,
+            f"<b>Тариф:</b> {plan_name}",
+            f"<b>Стоимость:</b> {price_text}",
+            "\nНажмите кнопку ниже, чтобы перейти на страницу оплаты ЮKassa. После успешного платежа мы начислим подписку и пришлём уведомление.",
+        ]
+
+        if chat_id:
+            await telegram_bot.bot.send_message(
+                chat_id=chat_id,
+                text="\n".join(message_lines),
+                parse_mode="HTML",
+                reply_markup=button_keyboard,
+                disable_web_page_preview=True,
+            )
     logger.info("Платёж %s создан для пользователя %s (webhook)", payment_id, user_id)
 
     return True
