@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.config import settings
 from ..core.database import get_db
 from ..services import SpecialistService
+from ..services.subscription_service import SubscriptionService
 from ..services.telegram_bot import telegram_bot
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,44 @@ def decode_payment_start_param(raw_param: str) -> Optional[dict]:
         "plan_type": plan_type,
         "price_kopecks": price_kopecks,
         "currency": currency,
+    }
+
+
+def decode_payresult_start_param(raw_param: str) -> Optional[dict]:
+    if not raw_param:
+        return None
+    padding = "=" * (-len(raw_param) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((raw_param + padding).encode("utf-8")).decode("utf-8")
+    except Exception:
+        return None
+
+    parts = decoded.split("|")
+    # payresult|ok|telegramId|specialistId|planType|paymentId|amountKopecks|currency
+    if len(parts) < 8 or parts[0] != "payresult":
+        return None
+
+    ok = parts[1] == 'ok'
+    telegram_id = parts[2] or None
+    specialist_id = parts[3] or None
+    plan_type = parts[4] or None
+    payment_id = parts[5] or None
+    amount_raw = parts[6] or '0'
+    currency = parts[7] or 'RUB'
+
+    try:
+        amount_kopecks = int(amount_raw)
+    except (TypeError, ValueError):
+        amount_kopecks = 0
+
+    return {
+        'ok': ok,
+        'telegram_id': telegram_id,
+        'specialist_id': specialist_id,
+        'plan_type': plan_type,
+        'payment_id': payment_id,
+        'amount_kopecks': amount_kopecks,
+        'currency': currency,
     }
 
 
@@ -347,6 +386,46 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         if len(parts) > 1:
             start_param = parts[1]
 
+            # Результат оплаты
+            decoded_result = decode_payresult_start_param(start_param)
+            if decoded_result:
+                if decoded_result.get('ok'):
+                    # Активируем подписку (идемпотентно)
+                    try:
+                        service = SubscriptionService(db)
+                        await service.activate_subscription(
+                            decoded_result.get('specialist_id'),
+                            decoded_result.get('plan_type'),
+                            decoded_result.get('payment_id'),
+                            decoded_result.get('amount_kopecks') or 0,
+                        )
+                    except Exception as e:
+                        logger.error("Ошибка активации подписки из старт-параметра: %s", e)
+
+                    # Сообщение об успехе и кнопка для мини-аппа
+                    kb = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="🚀 Открыть приложение",
+                                    web_app=WebAppInfo(url=settings.webapp_url),
+                                )
+                            ]
+                        ]
+                    )
+                    await telegram_bot.bot.send_message(
+                        chat_id=chat_id,
+                        text="✅ Оплата успешно завершена. Подписка активирована.",
+                        reply_markup=kb,
+                    )
+                else:
+                    await telegram_bot.bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ Оплата не завершена. Вы можете попробовать снова в мини‑приложении.",
+                    )
+                return {"ok": True}
+
+            # Старт оплаты из токена
             decoded_payment = decode_payment_start_param(start_param)
             if decoded_payment:
                 payload = {
