@@ -7,6 +7,7 @@ from typing import Dict, Optional
 import aiohttp
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import settings
@@ -38,13 +39,38 @@ def get_create_payment_url() -> str:
     return f"{base_url}/api/subscriptions/create-payment"
 
 
-def build_payment_keyboard() -> InlineKeyboardMarkup:
+def encode_payment_start_param(
+    telegram_id: str,
+    specialist_id: str,
+    plan_type: str,
+    price_kopecks: Optional[int],
+    currency: str,
+) -> str:
+    raw = "|".join([
+        "payment",
+        telegram_id or "",
+        specialist_id or "",
+        plan_type or "",
+        str(price_kopecks or ""),
+        currency or "RUB",
+    ])
+    encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8")
+    return encoded.rstrip("=")
+
+
+def get_payment_redirect_url(token: str, method: str) -> str:
+    base_url = settings.api_url.rstrip("/")
+    return f"{base_url}/api/telegram/pay?token={token}&method={method}"
+
+
+def build_payment_keyboard(token: str) -> InlineKeyboardMarkup:
+    bank_card_url = get_payment_redirect_url(token, "bank_card")
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="💳 Оплатить картой",
-                    callback_data="payment:bank_card",
+                    url=bank_card_url,
                 )
             ],
             [
@@ -108,6 +134,7 @@ def decode_payment_start_param(raw_param: str) -> Optional[dict]:
     if len(parts) < 6 or parts[0] != "payment":
         return None
 
+    telegram_id = parts[1] or None
     specialist_id = parts[2] or None
     plan_type = parts[3] or None
     price_raw = parts[4] or None
@@ -122,6 +149,7 @@ def decode_payment_start_param(raw_param: str) -> Optional[dict]:
         price_kopecks = None
 
     return {
+        "telegram_id": telegram_id,
         "specialist_id": specialist_id,
         "plan_type": plan_type,
         "price_kopecks": price_kopecks,
@@ -187,6 +215,14 @@ async def process_payment_command(chat_id: str, user_id: str, payload: dict):
     plan_name = plan.get("name") or plan_type
     price_text = format_price(plan.get("price_kopecks"))
 
+    token = encode_payment_start_param(
+        telegram_id=user_id,
+        specialist_id=specialist_id,
+        plan_type=plan_type,
+        price_kopecks=plan.get("price_kopecks"),
+        currency=plan.get("currency") or "RUB",
+    )
+
     text_lines = [
         "Вы собираетесь оформить подписку.",
         f"\n<b>Тариф:</b> {plan_name}",
@@ -198,7 +234,7 @@ async def process_payment_command(chat_id: str, user_id: str, payload: dict):
         chat_id=chat_id,
         text="\n".join(text_lines),
         parse_mode="HTML",
-        reply_markup=build_payment_keyboard(),
+        reply_markup=build_payment_keyboard(token),
         disable_web_page_preview=True,
     )
     logger.info("Пользователю %s отправлено меню выбора способа оплаты (webhook)", user_id)
@@ -242,88 +278,15 @@ async def process_payment_callback(callback_query: dict) -> bool:
         if chat_id:
             await telegram_bot.bot.send_message(
                 chat_id=chat_id,
-                text="Оплата через СБП пока в разработке. Пожалуйста, выберите оплату картой.",
+                text="Оплата через СБП пока в разработке. Пожалуйста, используйте оплату картой.",
             )
         return True
 
-    if method != "bank_card":
-        await telegram_bot.bot.answer_callback_query(
-            callback_id,
-            text="Неизвестный способ оплаты",
-            show_alert=True,
-        )
-        return True
-
-    try:
-        await telegram_bot.bot.answer_callback_query(callback_id, text="Готовим ссылку...")
-    except Exception:
-        logger.debug("Не удалось подтвердить callback", exc_info=True)
-
-    try:
-        payment_response = await request_payment_link(payload, method)
-    except ValueError as error:
-        logger.error("Не удалось создать платеж (webhook): %s", error)
-        if chat_id:
-            await telegram_bot.bot.send_message(
-                chat_id=chat_id,
-                text=f"Не удалось создать платеж: {error}",
-            )
-        return True
-    except Exception as error:
-        logger.exception("Непредвиденная ошибка при создании платежа (webhook)")
-        if chat_id:
-            await telegram_bot.bot.send_message(
-                chat_id=chat_id,
-                text="Произошла ошибка при создании платежа. Попробуйте позже.",
-            )
-        return True
-
-    confirmation_url = payment_response.get("confirmationUrl")
-    payment_id = payment_response.get("paymentId")
-
-    if not confirmation_url:
-        logger.error("В ответе отсутствует confirmationUrl (webhook): %s", payment_response)
-        if chat_id:
-            await telegram_bot.bot.send_message(
-                chat_id=chat_id,
-                text="Не удалось получить ссылку на оплату. Попробуйте позже.",
-            )
-        return True
-
-    pending_payments.pop(user_id, None)
-
-    button_keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Перейти к оплате",
-                    url=confirmation_url,
-                )
-            ]
-        ]
+    await telegram_bot.bot.answer_callback_query(
+        callback_id,
+        text="Используйте кнопку со ссылкой выше",
+        show_alert=True,
     )
-
-    plan = payload.get("plan", {})
-    plan_name = plan.get("name", "подписка")
-    price_text = format_price(plan.get("price_kopecks"))
-    header = f"Счёт #{payment_id} создан." if payment_id else "Счёт создан."
-
-    message_lines = [
-        header,
-        f"<b>Тариф:</b> {plan_name}",
-        f"<b>Стоимость:</b> {price_text}",
-        "\nНажмите кнопку ниже, чтобы перейти на страницу оплаты ЮKassa. После успешного платежа мы начислим подписку и пришлём уведомление.",
-    ]
-
-    if chat_id:
-        await telegram_bot.bot.send_message(
-            chat_id=chat_id,
-            text="\n".join(message_lines),
-            parse_mode="HTML",
-            reply_markup=button_keyboard,
-            disable_web_page_preview=True,
-        )
-    logger.info("Платёж %s создан для пользователя %s (webhook)", payment_id, user_id)
 
     return True
 
@@ -474,6 +437,62 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             )
 
     return {"ok": True}
+
+
+@router.get("/pay")
+async def telegram_pay(token: str, method: str):
+    decoded = decode_payment_start_param(token)
+    if not decoded:
+        return HTMLResponse("Неверная или устаревшая ссылка", status_code=400)
+
+    telegram_id = decoded.get("telegram_id")
+    specialist_id = decoded.get("specialist_id")
+    plan_type = decoded.get("plan_type")
+    price_kopecks = decoded.get("price_kopecks")
+    currency = decoded.get("currency") or "RUB"
+
+    if not all([telegram_id, specialist_id, plan_type]):
+        return HTMLResponse("Недостаточно данных для оформления платежа", status_code=400)
+
+    if method not in {"bank_card", "sbp"}:
+        return HTMLResponse("Неподдерживаемый способ оплаты", status_code=400)
+
+    if method == "sbp":
+        return HTMLResponse("Оплата через СБП пока в разработке", status_code=501)
+
+    payload = {
+        "telegram_id": telegram_id,
+        "specialist_id": specialist_id,
+        "plan": {
+            "plan_type": plan_type,
+            "price_kopecks": price_kopecks,
+            "currency": currency,
+        },
+    }
+
+    plan_details = await get_plan_details(plan_type)
+    if plan_details:
+        payload["plan"]["name"] = plan_details.get("name")
+        payload["plan"].setdefault("price_kopecks", plan_details.get("price"))
+        payload["plan"].setdefault("duration_days", plan_details.get("duration_days"))
+    else:
+        payload["plan"].setdefault("name", plan_type)
+
+    try:
+        payment_response = await request_payment_link(payload, method)
+    except ValueError as error:
+        logger.error("Не удалось создать платеж через /telegram/pay: %s", error)
+        return HTMLResponse(f"Не удалось создать платеж: {error}", status_code=400)
+    except Exception as error:
+        logger.exception("Непредвиденная ошибка при создании платежа через /telegram/pay")
+        return HTMLResponse("Не удалось создать платеж. Попробуйте позже.", status_code=500)
+
+    confirmation_url = payment_response.get("confirmationUrl")
+    if not confirmation_url:
+        logger.error("В ответе отсутствует confirmationUrl для /telegram/pay: %s", payment_response)
+        return HTMLResponse("Не удалось получить ссылку на оплату", status_code=502)
+
+    return RedirectResponse(url=confirmation_url)
 
 # Дублируем маршрут с завершающим слэшем на случай настроек прокси
 @router.post("/webhook/")

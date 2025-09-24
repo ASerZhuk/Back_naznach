@@ -39,18 +39,39 @@ def format_price(price_kopecks: Optional[int]) -> str:
     return f"{rubles:.2f} ₽"
 
 
-def get_create_payment_url() -> str:
-    base_url = settings.webapp_url.rstrip("/")
-    return f"{base_url}/api/subscriptions/create-payment"
+def encode_payment_start_param(
+    telegram_id: str,
+    specialist_id: str,
+    plan_type: str,
+    price_kopecks: Optional[int],
+    currency: str,
+) -> str:
+    safe_price = str(price_kopecks or "")
+    raw = "|".join([
+        "payment",
+        telegram_id or "",
+        specialist_id or "",
+        plan_type or "",
+        safe_price,
+        currency or "RUB",
+    ])
+    encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8")
+    return encoded.rstrip("=")
 
 
-def build_payment_keyboard() -> types.InlineKeyboardMarkup:
+def get_payment_redirect_url(token: str, method: str) -> str:
+    base_url = settings.api_url.rstrip("/")
+    return f"{base_url}/api/telegram/pay?token={token}&method={method}"
+
+
+def build_payment_keyboard(token: str) -> types.InlineKeyboardMarkup:
+    bank_card_url = get_payment_redirect_url(token, "bank_card")
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 types.InlineKeyboardButton(
                     text="💳 Оплатить картой",
-                    callback_data="payment:bank_card",
+                    url=bank_card_url,
                 )
             ],
             [
@@ -61,40 +82,6 @@ def build_payment_keyboard() -> types.InlineKeyboardMarkup:
             ],
         ]
     )
-
-
-async def request_payment_link(payload: dict, method: str) -> dict:
-    session = await get_http_session()
-    plan = payload.get("plan", {})
-    price_kopecks = plan.get("price_kopecks")
-
-    amount_decimal = None
-    if price_kopecks is not None:
-        amount_decimal = Decimal(str(price_kopecks)) / Decimal(100)
-    elif plan.get("amount") is not None:
-        amount_decimal = Decimal(str(plan["amount"]))
-
-    if amount_decimal is None:
-        raise ValueError("Не удалось определить сумму платежа")
-
-    request_json = {
-        "amount": f"{amount_decimal:.2f}",
-        "currency": plan.get("currency", "RUB"),
-        "description": plan.get("name") or "Оплата подписки",
-        "specialistId": payload.get("specialist_id"),
-        "planType": plan.get("plan_type"),
-        "planName": plan.get("name"),
-        "priceKopecks": price_kopecks,
-        "paymentMethod": method,
-        "telegramId": payload.get("telegram_id"),
-    }
-
-    url = get_create_payment_url()
-    async with session.post(url, json=request_json) as response:
-        data = await response.json()
-        if response.status >= 400:
-            raise ValueError(data if isinstance(data, str) else data.get("error", "Не удалось создать платеж"))
-        return data
 
 
 def decode_payment_start_param(raw_param: str) -> Optional[dict]:
@@ -110,6 +97,7 @@ def decode_payment_start_param(raw_param: str) -> Optional[dict]:
     if len(parts) < 6 or parts[0] != "payment":
         return None
 
+    telegram_id = parts[1] or None
     specialist_id = parts[2] or None
     plan_type = parts[3] or None
     price_raw = parts[4] or None
@@ -124,6 +112,7 @@ def decode_payment_start_param(raw_param: str) -> Optional[dict]:
         price_kopecks = None
 
     return {
+        "telegram_id": telegram_id,
         "specialist_id": specialist_id,
         "plan_type": plan_type,
         "price_kopecks": price_kopecks,
@@ -183,6 +172,14 @@ async def process_payment_command(chat_id: str, user_id: str, payload: dict):
     plan_name = plan.get("name") or plan_type
     price_text = format_price(plan.get("price_kopecks"))
 
+    token = encode_payment_start_param(
+        telegram_id=user_id,
+        specialist_id=specialist_id,
+        plan_type=plan_type,
+        price_kopecks=plan.get("price_kopecks"),
+        currency=plan.get("currency") or "RUB",
+    )
+
     text_lines = [
         "Вы собираетесь оформить подписку.",
         f"\n<b>Тариф:</b> {plan_name}",
@@ -194,7 +191,7 @@ async def process_payment_command(chat_id: str, user_id: str, payload: dict):
         chat_id=chat_id,
         text="\n".join(text_lines),
         parse_mode="HTML",
-        reply_markup=build_payment_keyboard(),
+        reply_markup=build_payment_keyboard(token),
         disable_web_page_preview=True,
     )
     logger.info("Пользователю %s отправлено меню выбора способа оплаты", user_id)
@@ -304,70 +301,11 @@ async def handle_payment_choice(callback: types.CallbackQuery):
     if method == "sbp":
         await callback.answer("Скоро будет доступно", show_alert=True)
         await callback.message.answer(
-            "Оплата через СБП находится в разработке. Пожалуйста, выберите оплату картой."
+            "Оплата через СБП находится в разработке. Пожалуйста, используйте оплату картой."
         )
         return
 
-    if method != "bank_card":
-        await callback.answer("Неизвестный способ оплаты", show_alert=True)
-        return
-
-    try:
-        await callback.answer("Готовим ссылку...")
-    except Exception:
-        logger.debug("Не удалось отправить подтверждение callback", exc_info=True)
-
-    try:
-        payment_response = await request_payment_link(payload, method)
-    except ValueError as error:
-        logger.error("Не удалось создать платеж: %s", error)
-        await callback.message.answer(f"Не удалось создать платеж: {error}")
-        return
-    except Exception as error:
-        logger.exception("Непредвиденная ошибка при создании платежа")
-        await callback.message.answer("Произошла ошибка при создании платежа. Попробуйте позже.")
-        return
-
-    confirmation_url = payment_response.get("confirmationUrl")
-    payment_id = payment_response.get("paymentId")
-
-    if not confirmation_url:
-        logger.error("В ответе отсутствует confirmationUrl: %s", payment_response)
-        await callback.message.answer("Не удалось получить ссылку на оплату. Попробуйте позже.")
-        return
-
-    pending_payments.pop(user_id, None)
-
-    button_keyboard = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                types.InlineKeyboardButton(
-                    text="Перейти к оплате",
-                    url=confirmation_url,
-                )
-            ]
-        ]
-    )
-
-    plan = payload.get("plan", {})
-    plan_name = plan.get("name", "подписка")
-    price_text = format_price(plan.get("price_kopecks"))
-    header = f"Счёт #{payment_id} создан." if payment_id else "Счёт создан."
-    message_lines = [
-        header,
-        f"<b>Тариф:</b> {plan_name}",
-        f"<b>Стоимость:</b> {price_text}",
-        "\nНажмите кнопку ниже, чтобы перейти на страницу оплаты ЮKassa. После успешного платежа мы начислим подписку и пришлём уведомление.",
-    ]
-
-    await callback.message.answer(
-        "\n".join(message_lines),
-        parse_mode="HTML",
-        reply_markup=button_keyboard,
-        disable_web_page_preview=True,
-    )
-    
-    logger.info("Платёж %s создан для пользователя %s", payment_id, user_id)
+    await callback.answer("Используйте кнопку со ссылкой выше", show_alert=True)
 
 async def register_new_user(message: types.Message, user_id: str, username: str, first_name: str, last_name: str):
     """Регистрация нового пользователя"""
