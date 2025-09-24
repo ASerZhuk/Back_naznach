@@ -60,8 +60,8 @@ class UserService:
             user = User(**user_data.dict())
             self.db.add(user)
             await self.db.commit()
-            await self.db.refresh(user)
-            return user
+            # Возвращаем пользователя с предзагруженными связями
+            return await self.get_user_by_telegram_id(user.telegram_id)
         except Exception as e:
             logger.error(f"Ошибка при создании пользователя: {e}")
             await self.db.rollback()
@@ -78,8 +78,8 @@ class UserService:
                 setattr(user, field, value)
             
             await self.db.commit()
-            await self.db.refresh(user)
-            return user
+            # Возвращаем пользователя с предзагруженными связями
+            return await self.get_user_by_telegram_id(telegram_id)
         except Exception as e:
             logger.error(f"Ошибка при обновлении пользователя: {e}")
             await self.db.rollback()
@@ -122,8 +122,7 @@ class UserService:
             user.is_first = False  # Устанавливаем, что это не первый вход
             
             await self.db.commit()
-            await self.db.refresh(user)
-            return user
+            return await self.get_user_by_telegram_id(telegram_id)
         except Exception as e:
             logger.error(f"Ошибка при установке типа пользователя: {e}")
             await self.db.rollback()
@@ -138,8 +137,7 @@ class UserService:
             
             user.is_first = False
             await self.db.commit()
-            await self.db.refresh(user)
-            return user
+            return await self.get_user_by_telegram_id(telegram_id)
         except Exception as e:
             logger.error(f"Ошибка при отметке пользователя: {e}")
             await self.db.rollback()
