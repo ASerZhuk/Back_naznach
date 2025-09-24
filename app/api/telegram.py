@@ -97,6 +97,18 @@ async def request_payment_link(payload: dict, method: str) -> dict:
     if amount_decimal is None:
         raise ValueError("Не удалось определить сумму платежа")
 
+    # Подготовим returnToken: seed|telegramId|specialistId|planType|priceKopecks|currency (base64url)
+    seed_raw = "|".join([
+        "seed",
+        str(payload.get("telegram_id") or ""),
+        str(payload.get("specialist_id") or ""),
+        str(plan.get("plan_type") or ""),
+        str(price_kopecks or ""),
+        str(plan.get("currency") or "RUB"),
+    ])
+    import base64 as _b64
+    returnToken = _b64.urlsafe_b64encode(seed_raw.encode("utf-8")).decode("utf-8").rstrip("=")
+
     request_json = {
         "amount": f"{amount_decimal:.2f}",
         "currency": plan.get("currency", "RUB"),
@@ -107,6 +119,7 @@ async def request_payment_link(payload: dict, method: str) -> dict:
         "priceKopecks": price_kopecks,
         "paymentMethod": method,
         "telegramId": payload.get("telegram_id"),
+        "returnToken": returnToken,
     }
 
     url = get_create_payment_url()
