@@ -313,9 +313,9 @@ async def handle_payment_choice(callback: types.CallbackQuery):
         return
 
     try:
-        await callback.answer()
+        await callback.answer("Формируем ссылку...")
     except Exception:
-        pass
+        logger.debug("Не удалось отправить callback.answer", exc_info=True)
 
     try:
         payment_response = await request_payment_link(payload, method)

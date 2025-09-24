@@ -254,7 +254,10 @@ async def process_payment_callback(callback_query: dict) -> bool:
         )
         return True
 
-    await telegram_bot.bot.answer_callback_query(callback_id)
+    try:
+        await telegram_bot.bot.answer_callback_query(callback_id, text="Формируем ссылку...")
+    except Exception:
+        logger.debug("Не удалось отправить answer_callback_query", exc_info=True)
 
     try:
         payment_response = await request_payment_link(payload, method)
