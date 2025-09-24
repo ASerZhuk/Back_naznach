@@ -313,6 +313,11 @@ async def handle_payment_choice(callback: types.CallbackQuery):
         return
 
     try:
+        await callback.answer("Готовим ссылку...")
+    except Exception:
+        logger.debug("Не удалось отправить подтверждение callback", exc_info=True)
+
+    try:
         payment_response = await request_payment_link(payload, method)
     except ValueError as error:
         logger.error("Не удалось создать платеж: %s", error)
@@ -333,40 +338,35 @@ async def handle_payment_choice(callback: types.CallbackQuery):
 
     pending_payments.pop(user_id, None)
 
-    try:
-        await callback.answer(url=confirmation_url)
-    except Exception:
-        logger.debug("answer_callback_query с URL не удался", exc_info=True)
-        # Фолбэк: отправляем сообщение с кнопкой
-        button_keyboard = types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(
-                        text="Перейти к оплате",
-                        url=confirmation_url,
-                    )
-                ]
+    button_keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="Перейти к оплате",
+                    url=confirmation_url,
+                )
             ]
-        )
-
-        plan = payload.get("plan", {})
-        plan_name = plan.get("name", "подписка")
-        price_text = format_price(plan.get("price_kopecks"))
-        header = f"Счёт #{payment_id} создан." if payment_id else "Счёт создан."
-        message_lines = [
-            header,
-            f"<b>Тариф:</b> {plan_name}",
-            f"<b>Стоимость:</b> {price_text}",
-            "\nНажмите кнопку ниже, чтобы перейти на страницу оплаты ЮKassa. После успешного платежа мы начислим подписку и пришлём уведомление.",
         ]
+    )
 
-        await callback.message.answer(
-            "\n".join(message_lines),
-            parse_mode="HTML",
-            reply_markup=button_keyboard,
-            disable_web_page_preview=True,
-        )
+    plan = payload.get("plan", {})
+    plan_name = plan.get("name", "подписка")
+    price_text = format_price(plan.get("price_kopecks"))
+    header = f"Счёт #{payment_id} создан." if payment_id else "Счёт создан."
+    message_lines = [
+        header,
+        f"<b>Тариф:</b> {plan_name}",
+        f"<b>Стоимость:</b> {price_text}",
+        "\nНажмите кнопку ниже, чтобы перейти на страницу оплаты ЮKassa. После успешного платежа мы начислим подписку и пришлём уведомление.",
+    ]
 
+    await callback.message.answer(
+        "\n".join(message_lines),
+        parse_mode="HTML",
+        reply_markup=button_keyboard,
+        disable_web_page_preview=True,
+    )
+    
     logger.info("Платёж %s создан для пользователя %s", payment_id, user_id)
 
 async def register_new_user(message: types.Message, user_id: str, username: str, first_name: str, last_name: str):
