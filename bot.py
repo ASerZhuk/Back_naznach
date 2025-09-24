@@ -66,6 +66,7 @@ def get_payment_redirect_url(token: str, method: str) -> str:
 
 def build_payment_keyboard(token: str) -> types.InlineKeyboardMarkup:
     bank_card_url = get_payment_redirect_url(token, "bank_card")
+    sbp_url = get_payment_redirect_url(token, "sbp")
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -77,7 +78,7 @@ def build_payment_keyboard(token: str) -> types.InlineKeyboardMarkup:
             [
                 types.InlineKeyboardButton(
                     text="📱 Оплатить через СБП",
-                    callback_data="payment:sbp",
+                    url=sbp_url,
                 )
             ],
         ]
