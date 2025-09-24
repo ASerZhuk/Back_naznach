@@ -1,11 +1,16 @@
 import asyncio
+import json
 import logging
-from aiogram import Bot, Dispatcher, types
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.context import FSMContext
-from aiogram.filters import Command
-from app.core.config import settings
+from decimal import Decimal
+from typing import Dict, Optional
+
 import aiohttp
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
+
+from app.core.config import settings
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +23,72 @@ dp = Dispatcher(storage=storage)
 
 # Глобальная сессия aiohttp для переиспользования
 http_session = None
+pending_payments: Dict[str, dict] = {}
+
+
+def format_price(price_kopecks: Optional[int]) -> str:
+    if price_kopecks is None:
+        return "-"
+    rubles = Decimal(price_kopecks) / Decimal(100)
+    return f"{rubles:.2f} ₽"
+
+
+def get_create_payment_url() -> str:
+    base_url = settings.webapp_url.rstrip("/")
+    return f"{base_url}/api/subscriptions/create-payment"
+
+
+def build_payment_keyboard() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="💳 Оплатить картой",
+                    callback_data="payment:bank_card",
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="📱 Оплатить через СБП",
+                    callback_data="payment:sbp",
+                )
+            ],
+        ]
+    )
+
+
+async def request_payment_link(payload: dict, method: str) -> dict:
+    session = await get_http_session()
+    plan = payload.get("plan", {})
+    price_kopecks = plan.get("price_kopecks")
+
+    amount_decimal = None
+    if price_kopecks is not None:
+        amount_decimal = Decimal(price_kopecks) / Decimal(100)
+    elif plan.get("amount") is not None:
+        amount_decimal = Decimal(str(plan["amount"]))
+
+    if amount_decimal is None:
+        raise ValueError("Не удалось определить сумму платежа")
+
+    request_json = {
+        "amount": f"{amount_decimal:.2f}",
+        "currency": plan.get("currency", "RUB"),
+        "description": plan.get("name") or "Оплата подписки",
+        "specialistId": payload.get("specialist_id"),
+        "planType": plan.get("plan_type"),
+        "planName": plan.get("name"),
+        "priceKopecks": price_kopecks,
+        "paymentMethod": method,
+        "telegramId": payload.get("telegram_id"),
+    }
+
+    url = get_create_payment_url()
+    async with session.post(url, json=request_json) as response:
+        data = await response.json()
+        if response.status >= 400:
+            raise ValueError(data if isinstance(data, str) else data.get("error", "Не удалось создать платеж"))
+        return data
 
 async def get_http_session():
     """Получить глобальную HTTP сессию"""
@@ -75,6 +146,129 @@ async def cmd_start(message: types.Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Ошибка в cmd_start: {e}")
         await message.answer("Произошла ошибка. Попробуйте позже.")
+
+
+@dp.message(F.web_app_data)
+async def handle_web_app_data(message: types.Message):
+    """Получаем данные из мини-приложения и предлагаем выбрать способ оплаты."""
+    try:
+        raw_data = message.web_app_data.data
+        payload = json.loads(raw_data)
+    except Exception as e:
+        logger.error(f"Не удалось распарсить web_app_data: {e}")
+        await message.answer("Не удалось обработать данные из приложения. Попробуйте снова.")
+        return
+
+    if payload.get("command") != "payment":
+        logger.info("Получена web_app_data с неизвестной командой: %s", payload.get("command"))
+        return
+
+    user_id = str(message.from_user.id)
+    payload["telegram_id"] = user_id
+    pending_payments[user_id] = payload
+
+    plan = payload.get("plan", {})
+    plan_name = plan.get("name", "подписку")
+    price_text = format_price(plan.get("price_kopecks"))
+
+    text_lines = [
+        "Вы собираетесь оформить подписку.",
+        f"\n<b>Тариф:</b> {plan_name}",
+        f"<b>Стоимость:</b> {price_text}",
+        "\nВыберите способ оплаты:",
+    ]
+
+    keyboard = build_payment_keyboard()
+
+    await message.answer("\n".join(text_lines), parse_mode="HTML", reply_markup=keyboard)
+    logger.info("Пользователю %s отправлено меню выбора способа оплаты", user_id)
+
+
+@dp.callback_query(F.data.startswith("payment:"))
+async def handle_payment_choice(callback: types.CallbackQuery):
+    data = callback.data or ""
+    _, method = data.split(":", maxsplit=1)
+    user_id = str(callback.from_user.id)
+
+    payload = pending_payments.get(user_id)
+    if not payload:
+        await callback.answer("Данные устарели. Откройте мини-приложение ещё раз.", show_alert=True)
+        await callback.message.answer("Не найдено данных для оплаты. Попробуйте снова через мини-приложение.")
+        return
+
+    if method == "sbp":
+        await callback.answer("Скоро будет доступно", show_alert=True)
+        await callback.message.answer(
+            "Оплата через СБП находится в разработке. Пожалуйста, выберите оплату картой."
+        )
+        return
+
+    if method != "bank_card":
+        await callback.answer("Неизвестный способ оплаты", show_alert=True)
+        return
+
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    try:
+        payment_response = await request_payment_link(payload, method)
+    except ValueError as error:
+        logger.error("Не удалось создать платеж: %s", error)
+        await callback.message.answer(f"Не удалось создать платеж: {error}")
+        return
+    except Exception as error:
+        logger.exception("Непредвиденная ошибка при создании платежа")
+        await callback.message.answer("Произошла ошибка при создании платежа. Попробуйте позже.")
+        return
+
+    confirmation_url = payment_response.get("confirmationUrl")
+    payment_id = payment_response.get("paymentId")
+
+    if not confirmation_url:
+        logger.error("В ответе отсутствует confirmationUrl: %s", payment_response)
+        await callback.message.answer("Не удалось получить ссылку на оплату. Попробуйте позже.")
+        return
+
+    pending_payments.pop(user_id, None)
+
+    try:
+        await callback.message.edit_reply_markup()
+    except Exception:
+        pass
+
+    button_keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="Перейти к оплате",
+                    url=confirmation_url,
+                )
+            ]
+        ]
+    )
+
+    plan = payload.get("plan", {})
+    plan_name = plan.get("name", "подписка")
+    price_text = format_price(plan.get("price_kopecks"))
+
+    header = f"Счёт #{payment_id} создан." if payment_id else "Счёт создан."
+
+    message_lines = [
+        header,
+        f"<b>Тариф:</b> {plan_name}",
+        f"<b>Стоимость:</b> {price_text}",
+        "\nНажмите кнопку ниже, чтобы перейти на страницу оплаты ЮKassa. После успешного платежа мы начислим подписку и пришлём уведомление." 
+    ]
+
+    await callback.message.answer(
+        "\n".join(message_lines),
+        parse_mode="HTML",
+        reply_markup=button_keyboard,
+        disable_web_page_preview=True,
+    )
+    logger.info("Платёж %s создан для пользователя %s", payment_id, user_id)
 
 async def register_new_user(message: types.Message, user_id: str, username: str, first_name: str, last_name: str):
     """Регистрация нового пользователя"""
