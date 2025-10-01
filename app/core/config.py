@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     
     # Telegram Bot
     telegram_bot_token: str
-    telegram_bot_username: str = "your_bot_username"
+    telegram_bot_username: str = "app_naznach_bot"
     
     # App Settings
     debug: bool = False
